@@ -690,24 +690,25 @@ class ExoSubtitleEngine(
         httpFactory = http
         applyRequestHeaders()
         val dataSource = androidx.media3.datasource.DefaultDataSource.Factory(context, http)
+        
         // Match mpv's buffering depth so stability doesn't drop after the handoff (Dev refinement #3).
-        // The film buffer the user chose, or the tier's. The byte target below follows the same
-        // choice (see [filmTargetBytes]): on Auto it is the tier's, exactly as before; a chosen buffer
-        // may grow it up to the device's film ceiling and the heap cap, so it is no longer fixed at 16/48 MiB.
         val maxBufferMs = FilmNetwork.bufferSecs(filmBufferSecs, budget) * 1000
         val minBufferMs = (maxBufferMs / 2).coerceIn(15_000, maxBufferMs)
         val builtTargetBytes = filmTargetBytes()
-        android.util.Log.i(TAG, "film_buffer max=${maxBufferMs}ms bytes=$builtTargetBytes bitrateHint=${lastFilmBitrateBps ?: -1} heapClassMb=$heapClassMb")
-        val loadControl = DefaultLoadControl.Builder()
-            .setBufferDurationsMs(minBufferMs, maxBufferMs, 2_500, 5_000)
-            // Durations alone are not a memory bound: at 120 s (the top RAM tier) a 4K stream can ask the
-            // allocator for hundreds of MB before the duration target is met, and a TV app dies long
-            // before that. Media3's own default is derived from the duration, so scale with the same
-            // tier instead of leaving it uncapped — and a chosen Film buffer never past the device's
-            // film ceiling ([PlayerBudget.filmCeilingBytes]) or a quarter of the Java heap, where
-            // ExoPlayer keeps its buffer ([SmartBuffer.exoHeapCapBytes]).
-            .setTargetBufferBytes(builtTargetBytes)
-            .build()
+        
+        // Use a conditional expression to check if the user set a custom buffer size of 0.
+        // A size of 0 entirely disables the network cache to provide 0ms latency.
+        val loadControl = if (filmBufferSecs == 0) {
+            DefaultLoadControl.Builder()
+                .setBufferDurationsMs(0, 0, 0, 0)
+                .build()
+        } else {
+            DefaultLoadControl.Builder()
+                .setBufferDurationsMs(minBufferMs, maxBufferMs, 2_500, 5_000)
+                .setTargetBufferBytes(builtTargetBytes)
+                .build()
+        }
+
         val trackSelector = DefaultTrackSelector(context).apply {
             // Settings → Sound & subtitles → Preferred audio / subtitle language. These reached mpv only
             // (alang/slang), so an image-subtitle handoff or an ExoPlayer-preferred VOD silently ignored
@@ -1344,4 +1345,3 @@ private class SdrHlsRouting(
         else main.createMediaSource(item)
     }
 }
-
